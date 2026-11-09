@@ -1,0 +1,7 @@
+[global]
+exclude = [".venv", ".git"]
+respect-gitignore = true
+
+# AGENTS.md is written as one long line per paragraph/bullet; don't force wrapping.
+[MD013]
+enabled = false

@@ -1,0 +1,17 @@
+# ~/.config/skill-sync/config.toml
+
+# Central folder: each child directory holding SKILL.md is one skill.
+source = "~/.local/agents/skills"
+
+# One per-skill symlink is kept in each of these.
+# ~/.agents/skills covers codex and pi, so don't also list ~/.codex/skills
+# or ~/.pi/agent/skills or they would see every skill twice.
+targets = [
+  "~/.claude/skills",   # Claude Code
+  "~/.kiro/skills",     # Kiro CLI / Kiro IDE / KiroCrew
+  "~/.agents/skills",   # Codex, pi, etc (Gemini CLI, Copilot CLI)
+]
+
+pull = true        # git pull --ff-only in the source before each sync
+relative = false   # absolute links survive moving the target folders
+strict = false     # true = don't link skills whose SKILL.md fails validation

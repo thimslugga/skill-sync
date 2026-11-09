@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+*.py text diff=python
+*.md text diff=markdown
+*.toml text
+*.service text
+*.timer text
+*.path text
+*.plist text
+
+# Generated; collapse in diffs and never hand-merge.
+uv.lock text -diff linguist-generated merge=binary

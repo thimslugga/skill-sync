@@ -1,0 +1,145 @@
+# Lint/type/test profile for the single-file skill_sync.py (no build backend,
+# no package metadata). Derived from pyproject.example.toml; relaxations for a
+# stdlib-only CLI script:
+#   D    docstrings not required on every function
+#   ANN  annotations not forced (pyrefly still checks what IS annotated)
+#   T201 print() allowed (a script's stdout is its real output)
+
+[project]
+name = "skill-sync"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pyrefly>=1.4,<2",
+    "pytest>=9",
+    "rumdl>=0.3,<0.4",
+    "ruff>=0.17,<0.18",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = [".", "tests"]
+show-fixes = true
+
+[tool.ruff.lint]
+# Keep in sync with assets/pyproject.toml [tool.ruff.lint] select.
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "N",        # pep8-naming
+    "I",        # isort
+    "B",        # bugbear
+    "Q",        # flake8-quotes (formatter-conflicting codes ignored below)
+    "C4",       # comprehensions
+    "FA",       # future annotations
+    "DTZ",      # naive datetimes
+    "LOG",      # flake8-logging
+    "G",        # logging format (G004: no f-strings in logs)
+    "EM",       # exception messages
+    "S",        # bandit
+    "UP",       # pyupgrade
+    "SIM",      # simplify
+    "PTH",      # pathlib
+    "RET",      # returns
+    "ARG",      # unused arguments
+    "D",        # pydocstyle
+    "ANN",      # annotations
+    "TID",      # tidy imports / banned-api
+    "PGH",      # pygrep hooks (blanket noqa / type: ignore)
+    "RUF",      # ruff-specific
+    "C90",      # mccabe
+    "PL",       # pylint (includes PLE1205/PLE1206)
+    "EXE",      # executable/shebang
+    "PYI",      # stub files
+    "T20",      # print / breakpoint
+    "BLE",      # blind except
+    "TRY",      # exception anti-patterns
+    "ASYNC",    # blocking calls in async
+    "PT",       # pytest style
+    "ERA",      # commented-out code
+    "PERF",     # performance anti-patterns
+]
+ignore = [
+    # Conflict with / redundant under `ruff format`
+    "W191", "E111", "E114", "E117", "D206", "D300",
+    "Q000", "Q001", "Q002", "Q003", "Q004",
+    # One-off script relaxations (mirrors `scripts/check --script`)
+    "D", "ANN", "T201",
+]
+fixable = ["ALL"]
+# Never auto-delete these; make a human look at them
+unfixable = ["F401", "F841", "ERA001"]
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+# forces leaner functions, same as the project template
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+# Thresholds sit just above what skill_sync.py uses today (max 8 branches,
+# 5 returns, 3 nested blocks, 3 positional args) so growth gets flagged
+# before it hurts; mccabe above still caps overall complexity.
+[tool.ruff.lint.pylint]
+max-args = 5
+max-positional-args = 3
+max-branches = 10
+max-returns = 6
+max-statements = 40
+max-locals = 12
+max-nested-blocks = 4
+max-bool-expr = 4
+max-public-methods = 20
+allow-magic-value-types = ["str", "bytes"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["skill_sync"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",     # assert is how pytest works
+    "PLR2004",  # magic values in assertions
+    "PLR0917",  # pytest fixtures arrive as positional args
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+# Docs: https://pyrefly.org/en/docs/configuration/
+[tool.pyrefly]
+required-version = ">=1.4,<2.0"
+preset = "strict"
+project-includes = ["skill_sync.py", "tests"]
+python-version = "3.12"
+use-ignore-files = true
+check-unannotated-defs = true
+infer-return-types = "checked"
+permissive-ignores = false
+min-severity = "warn"               # warnings also produce a non-zero exit
+
+[tool.pyrefly.errors]
+# Check typed code strictly without requiring annotations (mirrors ruff ANN ignore).
+implicit-any-parameter = false
+no-any-return = "error"
+redundant-cast = "error"
+unused-ignore = "error"
+
+[[tool.pyrefly.sub-config]]
+matches = "tests/**"
+
+[tool.pyrefly.sub-config.errors]
+implicit-any = "ignore"             # fixtures/mocks are often untyped
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers"]

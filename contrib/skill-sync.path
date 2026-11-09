@@ -1,0 +1,11 @@
+[Unit]
+Description=Re-sync agent skills when a skill is added or removed locally
+
+[Path]
+# Fires when entries in the source folder are created, removed or renamed.
+# Edit to match `source` in ~/.config/skill-sync/config.toml.
+PathChanged=/srv/agent-skills/skills
+Unit=skill-sync.service
+
+[Install]
+WantedBy=default.target

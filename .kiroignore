@@ -1,0 +1,10 @@
+# Keep generated, cached and machine-local files out of Kiro's context.
+.git/
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+.pyrefly_cache/
+.rumdl_cache/
+uv.lock

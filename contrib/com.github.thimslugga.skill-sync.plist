@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Install: sed "s|__HOME__|$HOME|g" this.plist > ~/Library/LaunchAgents/com.github.thimslugga.skill-sync.plist
+     macOS /usr/bin/python3 is too old (needs 3.12+), so this runs through uv. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.github.thimslugga.skill-sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.local/bin/uv</string>
+    <string>run</string>
+    <string>--quiet</string>
+    <string>--script</string>
+    <string>__HOME__/.local/bin/skill-sync</string>
+    <string>--quiet</string>
+    <string>sync</string>
+  </array>
+  <!-- Re-run when skills are added/removed locally; edit to match `source`. -->
+  <key>WatchPaths</key>
+  <array>
+    <string>__HOME__/agent-skills/skills</string>
+  </array>
+  <!-- And every 15 minutes to pick up git changes from other machines. -->
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/skill-sync.log</string>
+</dict>
+</plist>
