@@ -21,6 +21,8 @@ dev = [
 
 [tool.uv]
 package = false
+exclude-newer = "3 days"
+index-strategy = "first-index"
 
 [tool.ruff]
 line-length = 100
@@ -77,6 +79,21 @@ fixable = ["ALL"]
 # Never auto-delete these; make a human look at them
 unfixable = ["F401", "F841", "ERA001"]
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+# Add your own property-like decorators so D401 skips them too:
+# property-decorators = ["functools.cached_property"]
+
+[tool.ruff.lint.pep8-naming]
+# Framework-dictated names (ast.NodeVisitor, docutils, etc.); unittest names are ignored by default
+extend-ignore-names = ["visit_*", "generic_visit", "depart_*"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"os.path".msg = "Use pathlib.Path"
 
 # forces leaner functions, same as the project template
 [tool.ruff.lint.mccabe]

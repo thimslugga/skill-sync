@@ -17,6 +17,10 @@ lint:
     uv run ruff check .
     uv run rumdl check .
 
+# Apply safe fixes for all enabled Ruff rules
+lint-fix:
+    uv run ruff check --fix .
+
 # Check formatting without changing files
 fmt-check:
     uv run ruff format --check .
@@ -25,6 +29,9 @@ fmt-check:
 fmt:
     uv run ruff check --select I --fix .
     uv run ruff format .
+
+# Apply lint fixes, then sort imports and format
+fix: lint-fix fmt
 
 # Type check with pyrefly
 types:

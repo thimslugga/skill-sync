@@ -75,7 +75,7 @@ built-in defaults, then `$XDG_CONFIG_HOME/skill-sync/config.toml`
 | Key        | Type            | Default                                                     |
 | ---------- | --------------- | ----------------------------------------------------------- |
 | `source`   | string          | none (required, from the file or `--source`)                |
-| `targets`  | list of strings | `~/.agents/skills`, `~/.claude/skills`, `~/.kiro/skills`    |
+| `targets`  | list of strings | `~/.agents/skills`                                         |
 | `pull`     | boolean         | `false`                                                     |
 | `relative` | boolean         | `false`                                                     |
 | `strict`   | boolean         | `false`                                                     |
@@ -97,6 +97,8 @@ A link is **managed** only if it is a symlink that points into the source folder
   with a warning. Replace it with a real directory so per-skill links can exist.
 - Links are swapped atomically (a temporary link is renamed over the real name),
   so an agent never sees a missing skill during a sync.
+- An unmanaged file, directory, or symlink at the temporary path is reported as
+  a conflict and preserved. Managed temporary links are pruned before link swaps.
 
 Example output:
 
@@ -143,7 +145,7 @@ When both apply, 1 takes precedence over 3.
 [`contrib/`](contrib) has ready-made units. They expect the script at
 `~/.local/bin/skill-sync`.
 
-**systemd (user units)**
+### systemd (user units)
 
 ```bash
 cp contrib/skill-sync.{service,timer,path} ~/.config/systemd/user/
@@ -154,19 +156,25 @@ systemctl --user enable --now skill-sync.timer skill-sync.path
 The timer syncs 2 minutes after boot and every 15 minutes after that. The path
 unit syncs when a skill is added, removed, or renamed in the source.
 
-**macOS (launchd)**
+### macOS (launchd)
 
 Use `contrib/com.github.thimslugga.skill-sync.plist`. Edit `WatchPaths` to match
 your `source`.
 
-**Anywhere else**
+### Anywhere else
 
 ```bash
 skill-sync watch --interval 60
 ```
 
+The interval must be finite and greater than zero. Use `--dry-run watch` to
+preview each pass without pulling or changing skill links.
+
 A file lock in `$XDG_RUNTIME_DIR/skill-sync/lock` stops a timer run and `watch`
-from syncing at the same time.
+from syncing at the same time. Without an absolute `$XDG_RUNTIME_DIR`, the lock
+lives under a private `skill-sync-<uid>` directory in the system temporary
+folder. This is the normal default on macOS and needs no environment setup.
+Other platforms warn when using this fallback; relative values warn everywhere.
 
 ## Development
 

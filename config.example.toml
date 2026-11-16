@@ -7,11 +7,12 @@ source = "~/.local/agents/skills"
 # ~/.agents/skills covers codex and pi, so don't also list ~/.codex/skills
 # or ~/.pi/agent/skills or they would see every skill twice.
 targets = [
+  #"~/.agents/skills",   # Codex, pi, etc (Gemini CLI, Copilot CLI)
+  #"~/.pi/agent/skills", # Pi coding agent
   "~/.claude/skills",   # Claude Code
-  "~/.kiro/skills",     # Kiro CLI / Kiro IDE / KiroCrew
-  "~/.agents/skills",   # Codex, pi, etc (Gemini CLI, Copilot CLI)
+  #"~/.kiro/skills",     # Kiro CLI / Kiro IDE / KiroCrew
 ]
 
-pull = true        # git pull --ff-only in the source before each sync
+pull = false        # git pull --ff-only in the source before each sync
 relative = false   # absolute links survive moving the target folders
 strict = false     # true = don't link skills whose SKILL.md fails validation

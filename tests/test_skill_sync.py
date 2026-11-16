@@ -167,6 +167,24 @@ def test_relative_links_resolve_to_skill(env: dict[str, Path]) -> None:
     assert link.readlink().is_absolute()
 
 
+@pytest.mark.parametrize("alias", ["target", "parent"])
+def test_relative_links_resolve_through_target_alias(env: dict[str, Path], alias: str) -> None:
+    actual = env["root"] / "elsewhere" / "deep" / "nested" / "actual"
+    actual.mkdir(parents=True)
+    path = env["claude"] if alias == "target" else env["claude"].parent
+    path.parent.mkdir(parents=True)
+    path.symlink_to(actual)
+
+    assert run(env, "--relative") == 0
+    for name in ("pr-review", "aws-debug"):
+        link = env["claude"] / name
+        assert link.exists()
+        assert not link.readlink().is_absolute()
+        assert link.resolve() == (env["source"] / name).resolve()
+    assert run(env, "--relative", "status") == 0
+    assert run(env, "--relative") == 0
+
+
 def test_managed_detected_through_symlinked_source_path(env: dict[str, Path]) -> None:
     alias = env["root"] / "alias"
     alias.symlink_to(env["source"].parent)
@@ -202,12 +220,83 @@ def test_dry_run_changes_nothing(env: dict[str, Path], capsys: pytest.CaptureFix
     assert "create" in capsys.readouterr().out
 
 
-def test_leftover_tmp_link_is_pruned(env: dict[str, Path]) -> None:
+@pytest.mark.parametrize("replace", [False, True])
+def test_leftover_tmp_link_is_pruned(env: dict[str, Path], replace: bool) -> None:
     env["claude"].mkdir(parents=True)
+    link = env["claude"] / "pr-review"
+    if replace:
+        link.symlink_to(env["source"] / "aws-debug")
     tmp = env["claude"] / f".pr-review{ss.TMP_SUFFIX}"
     tmp.symlink_to(env["source"] / "pr-review")
-    run(env)
+    assert run(env) == 0
     assert not tmp.is_symlink()
+    assert link.resolve() == (env["source"] / "pr-review").resolve()
+    assert run(env, "status") == 0
+
+
+@pytest.mark.parametrize("kind", ["file", "directory", "symlink", "dangling-symlink"])
+@pytest.mark.parametrize("replace", [False, True])
+def test_unmanaged_tmp_path_is_a_conflict(env: dict[str, Path], kind: str, replace: bool) -> None:
+    env["claude"].mkdir(parents=True)
+    link = env["claude"] / "pr-review"
+    if replace:
+        link.symlink_to(env["source"] / "aws-debug")
+    tmp = env["claude"] / f".pr-review{ss.TMP_SUFFIX}"
+    foreign = env["root"] / "foreign"
+    if kind == "file":
+        tmp.write_text("user data", encoding="utf-8")
+    elif kind == "directory":
+        tmp.mkdir()
+    else:
+        if kind == "symlink":
+            foreign.mkdir()
+        tmp.symlink_to(foreign)
+    original_inode = tmp.lstat().st_ino
+
+    assert run(env) == ss.EXIT_CONFLICT
+    assert tmp.lstat().st_ino == original_inode
+    if replace:
+        assert link.readlink() == env["source"] / "aws-debug"
+    else:
+        assert not link.exists()
+    assert (env["claude"] / "aws-debug").exists()
+    assert run(env, "status") == ss.EXIT_CONFLICT
+    if kind == "file":
+        assert tmp.read_text(encoding="utf-8") == "user data"
+    elif kind in {"symlink", "dangling-symlink"}:
+        assert tmp.readlink() == foreign
+
+
+def test_tmp_file_created_after_planning_is_preserved(
+    env: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    apply_action = ss.apply_action
+    tmp = env["claude"] / f".pr-review{ss.TMP_SUFFIX}"
+
+    def create_file_then_apply(action: ss.Action) -> None:
+        if action.link == env["claude"] / "pr-review":
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text("user data", encoding="utf-8")
+        apply_action(action)
+
+    monkeypatch.setattr(ss, "apply_action", create_file_then_apply)
+    assert run(env) == 1
+    assert tmp.read_text(encoding="utf-8") == "user data"
+    assert not (env["claude"] / "pr-review").exists()
+
+
+def test_failed_swap_recovers_on_next_sync(
+    env: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_replace(_path: Path, target: Path) -> Path:
+        raise PermissionError(target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "replace", fail_replace)
+        assert run(env) == 1
+    assert run(env) == 0
+    assert run(env, "status") == 0
+    assert not list(env["claude"].glob(f"*{ss.TMP_SUFFIX}"))
 
 
 def test_apply_failure_returns_1(env: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -219,6 +308,17 @@ def test_apply_failure_returns_1(env: dict[str, Path], monkeypatch: pytest.Monke
 
 
 # --- status / validate / config -------------------------------------------------
+
+
+def test_default_target_is_one_folder(
+    env: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(env["root"] / "home"))
+    args = ss.build_parser().parse_args(["-s", str(env["source"])])
+    assert ss.resolve_config(args).targets == (env["agents"],)
+    assert ss.main(["-s", str(env["source"])]) == 0
+    assert (env["agents"] / "pr-review").exists()
+    assert not env["claude"].exists()
 
 
 def test_status_exit_codes(env: dict[str, Path]) -> None:
@@ -332,19 +432,26 @@ def test_pull_timeout_is_a_warning(
     assert "timed out" in caplog.text
 
 
-def test_runtime_dir_uses_absolute_xdg_runtime_dir(env: dict[str, Path]) -> None:
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_runtime_dir_uses_absolute_xdg_runtime_dir(
+    env: dict[str, Path], monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    monkeypatch.setattr(ss.sys, "platform", platform)
     assert ss.runtime_dir() == env["root"] / "run"
     assert run(env) == 0
     assert (env["root"] / "run" / "skill-sync" / "lock").is_file()
 
 
 @pytest.mark.parametrize("value", [None, "relative/run"])
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
 def test_runtime_dir_falls_back_to_private_tmp_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     value: str | None,
+    platform: str,
 ) -> None:
+    monkeypatch.setattr(ss.sys, "platform", platform)
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
     if value is None:
         monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
@@ -353,7 +460,23 @@ def test_runtime_dir_falls_back_to_private_tmp_dir(
     path = ss.runtime_dir()
     assert path.parent == tmp_path
     assert path.stat().st_mode & 0o777 == 0o700
-    assert "XDG_RUNTIME_DIR" in caplog.text
+    if platform == "darwin" and value is None:
+        assert "XDG_RUNTIME_DIR" not in caplog.text
+    else:
+        assert "XDG_RUNTIME_DIR" in caplog.text
+
+
+def test_macos_sync_without_xdg_runtime_dir_is_quiet(
+    env: dict[str, Path], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(ss.sys, "platform", "darwin")
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(env["root"]))
+
+    assert run(env) == 0
+    lock = env["root"] / f"skill-sync-{os.getuid()}" / "skill-sync" / "lock"
+    assert lock.is_file()
+    assert "WARNING" not in caplog.text
 
 
 def test_runtime_dir_rejects_unsafe_fallback(
@@ -373,6 +496,44 @@ def test_watch_stops_on_interrupt(env: dict[str, Path], monkeypatch: pytest.Monk
     monkeypatch.setattr(time, "sleep", stop)
     assert run(env, "watch", "--interval", "1") == 0
     assert (env["agents"] / "aws-debug").is_symlink()
+
+
+def test_dry_run_watch_preserves_links_and_skips_pull(
+    env: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env["agents"].mkdir(parents=True)
+    stale = env["agents"] / "removed"
+    stale.symlink_to(env["source"] / "removed")
+    wrong = env["agents"] / "pr-review"
+    wrong.symlink_to(env["source"] / "aws-debug")
+    calls = fake_git(monkeypatch, {})
+
+    def stop(_: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", stop)
+    assert run(env, "--dry-run", "--pull", "watch") == 0
+    assert not env["claude"].exists()
+    assert not (env["agents"] / "aws-debug").exists()
+    assert stale.is_symlink()
+    assert wrong.readlink() == env["source"] / "aws-debug"
+    assert calls == []
+
+
+@pytest.mark.parametrize("interval", ["-1", "0", "nan", "inf", "-inf"])
+def test_invalid_watch_interval_is_rejected_before_sync(
+    env: dict[str, Path], monkeypatch: pytest.MonkeyPatch, interval: str
+) -> None:
+    calls = fake_git(monkeypatch, {})
+
+    def unexpected_sleep(_: float) -> None:
+        pytest.fail("invalid watch interval reached the sync loop")
+
+    monkeypatch.setattr(time, "sleep", unexpected_sleep)
+    assert run(env, "watch", "--pull", f"--interval={interval}") == 2
+    assert not env["claude"].exists()
+    assert not env["agents"].exists()
+    assert calls == []
 
 
 def test_conflict_exit_code_yields_to_drift(env: dict[str, Path]) -> None:

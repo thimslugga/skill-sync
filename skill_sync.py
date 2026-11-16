@@ -35,6 +35,7 @@ import contextlib
 import enum
 import fcntl
 import logging
+import math
 import os
 import re
 import shutil
@@ -54,17 +55,22 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("skill-sync")
 
-DEFAULT_TARGETS = ("~/.agents/skills", "~/.claude/skills", "~/.kiro/skills")
+
+DEFAULT_TARGETS = ("~/.agents/skills",)
+
 
 COMMANDS = ("sync", "status", "validate", "watch")
+
+TMP_SUFFIX = ".skill-sync-tmp"
 
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 KEY_RE = re.compile(r"^([A-Za-z0-9_-]+):\s*(.*)$")
 
 BLOCK_SCALARS = frozenset({">", "|", ">-", "|-", ">+", "|+"})
+
 MAX_NAME_LEN = 64
 MAX_DESCRIPTION_LEN = 1024
-TMP_SUFFIX = ".skill-sync-tmp"
+
 EXIT_CONFLICT = 3  # sync/status: only unmanaged paths in the way
 
 
@@ -187,8 +193,8 @@ def is_managed(link: Path, source: Path) -> bool:
     if not link.is_symlink():
         return False
     dest = link_dest(link)
-    lexical = Path(os.path.normpath(dest))
-    if lexical.is_relative_to(Path(os.path.normpath(source))):
+    lexical = Path(os.path.normpath(dest))  # noqa: TID251  # Collapse '..' without resolving symlinks.
+    if lexical.is_relative_to(Path(os.path.normpath(source))):  # noqa: TID251  # Normalize both paths lexically.
         return True
     # Also catch links written through a different path to the same place,
     # e.g. /var/home vs /home on Fedora Silverblue.
@@ -198,8 +204,13 @@ def is_managed(link: Path, source: Path) -> bool:
 def wanted_dest(link: Path, skill: Path, *, relative: bool) -> Path:
     """Return the value the symlink at `link` should hold."""
     if relative:
-        return skill.relative_to(link.parent, walk_up=True)
+        return skill.relative_to(link.parent.resolve(), walk_up=True)
     return skill
+
+
+def temporary_link_path(link: Path) -> Path:
+    """Return the sibling path used to swap a skill link atomically."""
+    return link.with_name(f".{link.name}{TMP_SUFFIX}")
 
 
 def plan_link(link: Path, want: Path, source: Path) -> Action:
@@ -208,12 +219,17 @@ def plan_link(link: Path, want: Path, source: Path) -> Action:
         current = link.readlink()
         if current == want:
             return Action(Kind.OK, link, want)
-        if is_managed(link, source):
-            return Action(Kind.REPLACE, link, want, f"was -> {current}")
-        return Action(Kind.CONFLICT, link, want, f"foreign symlink -> {current}")
-    if link.exists():
+        if not is_managed(link, source):
+            return Action(Kind.CONFLICT, link, want, f"foreign symlink -> {current}")
+        action = Action(Kind.REPLACE, link, want, f"was -> {current}")
+    elif link.exists():
         return Action(Kind.CONFLICT, link, want, "real file or directory in the way")
-    return Action(Kind.CREATE, link, want)
+    else:
+        action = Action(Kind.CREATE, link, want)
+    tmp = temporary_link_path(link)
+    if (tmp.is_symlink() or tmp.exists()) and not is_managed(tmp, source):
+        return Action(Kind.CONFLICT, link, want, f"unmanaged temporary path in the way: {tmp}")
+    return action
 
 
 def plan_prune(target: Path, keep: Iterable[str], source: Path) -> list[Action]:
@@ -239,13 +255,14 @@ def plan_target(target: Path, skills: dict[str, Path], cfg: Config) -> list[Acti
         return []
     if target.is_symlink():
         log.warning("%s is itself a symlink; links will be created in its target", target)
-    actions = [
+    # Remove managed leftovers before their names are reused for atomic swaps.
+    actions = plan_prune(target, skills, cfg.source)
+    actions.extend(
         plan_link(
             target / name, wanted_dest(target / name, path, relative=cfg.relative), cfg.source
         )
         for name, path in skills.items()
-    ]
-    actions.extend(plan_prune(target, skills, cfg.source))
+    )
     return actions
 
 
@@ -285,8 +302,7 @@ def apply_action(action: Action) -> None:
     if action.kind not in {Kind.CREATE, Kind.REPLACE} or action.dest is None:
         return
     action.link.parent.mkdir(parents=True, exist_ok=True)
-    tmp = action.link.with_name(f".{action.link.name}{TMP_SUFFIX}")
-    tmp.unlink(missing_ok=True)
+    tmp = temporary_link_path(action.link)
     tmp.symlink_to(action.dest)
     tmp.replace(action.link)
 
@@ -353,22 +369,23 @@ def git_pull(source: Path) -> None:
 
 
 def runtime_dir() -> Path:
-    """Return the directory for runtime files, per the XDG Base Directory spec.
+    """Return the runtime base directory, using XDG or a private temp folder.
 
-    Uses $XDG_RUNTIME_DIR when it is set to an absolute path (the spec says to
-    ignore relative values). Otherwise falls back, with a warning as the spec
-    requires, to a per-user 0700 directory under the system temp dir, which
-    like the real runtime dir is not meant to outlive a reboot.
+    Honor an absolute $XDG_RUNTIME_DIR on every platform. Otherwise use a
+    verified per-user 0700 directory under the system temp dir. An unset XDG
+    runtime directory is normal on macOS; elsewhere, or for a relative value,
+    warn about the fallback as the XDG Base Directory spec requires.
     """
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime and Path(runtime).is_absolute():
         return Path(runtime)
     fallback = Path(tempfile.gettempdir()) / f"skill-sync-{os.getuid()}"
-    log.warning(
-        "$XDG_RUNTIME_DIR is %s; using %s for runtime files",
-        "not an absolute path" if runtime else "not set",
-        fallback,
-    )
+    if runtime or sys.platform != "darwin":
+        log.warning(
+            "$XDG_RUNTIME_DIR is %s; using %s for runtime files",
+            "not an absolute path" if runtime else "not set",
+            fallback,
+        )
     fallback.mkdir(mode=0o700, exist_ok=True)
     info = fallback.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
@@ -466,13 +483,16 @@ def cmd_validate(cfg: Config) -> int:
     return 1 if bad else 0
 
 
-def cmd_watch(cfg: Config, *, interval: float) -> int:
+def cmd_watch(cfg: Config, *, interval: float, dry_run: bool = False) -> int:
     """Run sync on a fixed interval until interrupted."""
+    if not math.isfinite(interval) or interval <= 0:
+        msg = "watch interval must be a finite number greater than zero"
+        raise SkillSyncError(msg)
     log.info("watching %s every %ss (Ctrl-C to stop)", cfg.source, interval)
     try:
         while True:
             try:
-                cmd_sync(cfg, dry_run=False)
+                cmd_sync(cfg, dry_run=dry_run)
             except SkillSyncError as exc:
                 # Keep running: the source may be on a mount that comes back.
                 log.error("%s", exc)  # noqa: TRY400  # message is complete; keep watching
@@ -527,7 +547,8 @@ def load_config_file(path: Path, *, required: bool) -> dict[str, Any]:
 
 def expand(raw: str) -> Path:
     """Expand ~ and $VARS and make absolute (without resolving symlinks)."""
-    return Path(os.path.abspath(Path(os.path.expandvars(raw)).expanduser()))  # noqa: PTH100  # Path.absolute() keeps '..'; abspath normalizes it without resolving links
+    expanded = Path(os.path.expandvars(raw)).expanduser()  # noqa: TID251  # pathlib has no environment variable expansion.
+    return Path(os.path.abspath(expanded))  # noqa: PTH100, TID251  # Collapse '..' without resolving symlinks; Path.absolute() keeps it.
 
 
 def resolve_config(args: argparse.Namespace) -> Config:
@@ -591,7 +612,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-n", "--dry-run", action="store_true", help="show changes only")
     parser.add_argument(
-        "--interval", type=float, default=60.0, help="seconds between passes for 'watch'"
+        "--interval",
+        type=float,
+        default=60.0,
+        help="seconds between passes for 'watch' (finite and greater than zero)",
     )
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("-v", "--verbose", action="store_true", help="also show ok links")
@@ -620,7 +644,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "validate":
             return cmd_validate(cfg)
         if args.command == "watch":
-            return cmd_watch(cfg, interval=args.interval)
+            return cmd_watch(cfg, interval=args.interval, dry_run=args.dry_run)
         return cmd_sync(cfg, dry_run=args.dry_run)
     except SkillSyncError as exc:
         log.error("%s", exc)  # noqa: TRY400  # user-facing error, no traceback wanted
