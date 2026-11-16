@@ -15,12 +15,18 @@ import skill_sync as ss
 
 
 def make_skill(
-    source: Path, name: str, *, declared: str | None = None, desc: str = "Does X."
+    source: Path,
+    name: str,
+    *,
+    declared: str | None = None,
+    desc: str = "Does X.",
+    extra: str = "",
 ) -> Path:
     skill = source / name
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text(
-        f"---\nname: {declared or name}\ndescription: {desc}\n---\n# {name}\n", encoding="utf-8"
+        f"---\nname: {declared or name}\ndescription: {desc}\n{extra}---\n# {name}\n",
+        encoding="utf-8",
     )
     return skill
 
@@ -95,6 +101,51 @@ def test_validate_reports_problems(tmp_path: Path) -> None:
     assert ss.validate_skill("no-desc", no_desc) == ["frontmatter has no 'description'"]
     assert "longer than" in ss.validate_skill("long", long_desc)[0]
     assert "frontmatter" in ss.validate_skill("plain", no_front)[0]
+
+
+def test_validate_accepts_every_spec_field(tmp_path: Path) -> None:
+    extra = (
+        "license: MIT\ncompatibility: Needs git\nallowed-tools: Bash(git:*)\n"
+        "metadata:\n  author: me\n"
+    )
+    skill = make_skill(tmp_path, "full", extra=extra)
+    assert ss.validate_skill("full", skill) == []
+    assert ss.unknown_fields(skill) == []
+
+
+def test_validate_rejects_long_compatibility(tmp_path: Path) -> None:
+    skill = make_skill(tmp_path, "compat", extra=f"compatibility: {'x' * 501}\n")
+    assert any("compatibility" in p for p in ss.validate_skill("compat", skill))
+    ok = make_skill(tmp_path, "compat-ok", extra=f"compatibility: {'x' * 500}\n")
+    assert ss.validate_skill("compat-ok", ok) == []
+
+
+def test_unknown_fields_lists_keys_outside_the_spec(tmp_path: Path) -> None:
+    skill = make_skill(tmp_path, "extra", extra="version: 2\nmodel: opus\n")
+    assert ss.unknown_fields(skill) == ["version", "model"]
+
+
+def test_validate_command_warns_on_unknown_field_without_failing(
+    env: dict[str, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    make_skill(env["source"], "extra", extra="version: 2\n")
+    assert run(env, "validate") == 0
+    assert "extra: unknown frontmatter field 'version'" in capsys.readouterr().out
+
+
+def test_unknown_field_warns_on_sync_and_is_linked_even_when_strict(
+    env: dict[str, Path], caplog: pytest.LogCaptureFixture
+) -> None:
+    make_skill(env["source"], "extra", extra="version: 2\n")
+    assert run(env, "--strict") == 0
+    assert (env["claude"] / "extra").is_symlink()
+    assert "unknown frontmatter field 'version'" in caplog.text
+
+
+def test_strict_excludes_long_compatibility(env: dict[str, Path]) -> None:
+    make_skill(env["source"], "wordy", extra=f"compatibility: {'x' * 501}\n")
+    run(env, "--strict")
+    assert not (env["claude"] / "wordy").exists()
 
 
 # --- sync behaviour -------------------------------------------------------------

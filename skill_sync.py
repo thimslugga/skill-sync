@@ -70,6 +70,13 @@ BLOCK_SCALARS = frozenset({">", "|", ">-", "|-", ">+", "|+"})
 
 MAX_NAME_LEN = 64
 MAX_DESCRIPTION_LEN = 1024
+MAX_COMPATIBILITY_LEN = 500
+
+# Frontmatter keys defined by the Agent Skills spec. Others are tolerated
+# (agents add their own) but reported, since they may be typos.
+KNOWN_FIELDS = frozenset(
+    {"name", "description", "license", "allowed-tools", "metadata", "compatibility"}
+)
 
 EXIT_CONFLICT = 3  # sync/status: only unmanaged paths in the way
 
@@ -174,7 +181,22 @@ def validate_skill(name: str, path: Path) -> list[str]:
         problems.append("frontmatter has no 'description'")
     elif len(description) > MAX_DESCRIPTION_LEN:
         problems.append(f"description longer than {MAX_DESCRIPTION_LEN} characters")
+    if len(meta.get("compatibility", "")) > MAX_COMPATIBILITY_LEN:
+        problems.append(f"compatibility longer than {MAX_COMPATIBILITY_LEN} characters")
     return problems
+
+
+def unknown_fields(path: Path) -> list[str]:
+    """Return frontmatter keys outside the spec. Unreadable files give none.
+
+    These are warnings, never errors: --strict must not drop a skill because an
+    agent-specific key is present.
+    """
+    try:
+        meta = read_frontmatter(path / "SKILL.md")
+    except (OSError, UnicodeDecodeError):
+        return []  # validate_skill already reports the read failure
+    return [key for key in meta if key not in KNOWN_FIELDS]
 
 
 # --------------------------------------------------------------------------
@@ -273,6 +295,8 @@ def select_skills(cfg: Config) -> dict[str, Path]:
         problems = validate_skill(name, path)
         for problem in problems:
             log.warning("%s: %s", name, problem)
+        for key in unknown_fields(path):
+            log.warning("%s: unknown frontmatter field '%s'", name, key)
         if problems and cfg.strict:
             log.warning("%s: excluded (--strict)", name)
             continue
@@ -479,6 +503,8 @@ def cmd_validate(cfg: Config) -> int:
         bad += bool(problems)
         for problem in problems:
             print(f"{name}: {problem}")
+        for key in unknown_fields(path):
+            print(f"{name}: unknown frontmatter field '{key}'")
     log.info("%d skill(s) with problems", bad)
     return 1 if bad else 0
 

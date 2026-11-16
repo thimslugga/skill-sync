@@ -115,6 +115,11 @@ conflict ~/.agents/skills/other  (real file or directory in the way)
 - `name` is present, matches the folder name, uses lowercase letters, digits and
   single hyphens, and is at most 64 characters.
 - `description` is present and at most 1024 characters.
+- `compatibility`, if present, is at most 500 characters.
+
+A frontmatter key outside the spec (`name`, `description`, `license`,
+`allowed-tools`, `metadata`, `compatibility`) is only a warning. `--strict` does not
+exclude a skill for it.
 
 The frontmatter reader is a small scalar and block-scalar parser, not a full YAML
 parser. This keeps the script free of dependencies.
